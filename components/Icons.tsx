@@ -163,6 +163,20 @@ export function LedgerIcon({ size = 32, className = "" }: IconProps) {
   );
 }
 
+export function UserIcon({ size = 20, className = "" }: IconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 20 20" fill="none" className={className}>
+      <circle cx="10" cy="7" r="3.5" stroke="currentColor" strokeWidth="1.8" />
+      <path
+        d="M3 17c0-3.314 3.134-6 7-6s7 2.686 7 6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function HistoryIcon({ size = 20, className = "" }: IconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 20 20" fill="none" className={className}>

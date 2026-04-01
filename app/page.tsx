@@ -7,10 +7,11 @@ import AddExpenseForm from "@/components/AddExpenseForm";
 import ExpenseList from "@/components/ExpenseList";
 import HisabKaro from "@/components/HisabKaro";
 import HistoryView from "@/components/HistoryView";
-import { PlusIcon, ListIcon, CalculatorIcon, LedgerIcon, HistoryIcon, LogoutIcon } from "@/components/Icons";
+import PersonalView from "@/components/PersonalView";
+import { PlusIcon, ListIcon, CalculatorIcon, LedgerIcon, HistoryIcon, LogoutIcon, UserIcon } from "@/components/Icons";
 import { useRouter } from "next/navigation";
 
-type Tab = "add" | "list" | "hisab" | "history";
+type Tab = "add" | "list" | "hisab" | "history" | "personal";
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("add");
@@ -230,6 +231,15 @@ export default function Home() {
             <HistoryView />
           </div>
         )}
+
+        {tab === "personal" && profile && (
+          <div>
+            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 px-1">
+              Mera Hisaab
+            </h2>
+            <PersonalView profile={profile} />
+          </div>
+        )}
       </main>
 
       {/* Bottom Nav */}
@@ -237,10 +247,11 @@ export default function Home() {
         <div className="flex">
           {(
             [
-              { id: "add",     label: "Daal Do", Icon: PlusIcon },
-              { id: "list",    label: "Ayashi",  Icon: ListIcon },
-              { id: "hisab",   label: "Hisab",   Icon: CalculatorIcon },
-              { id: "history", label: "History", Icon: HistoryIcon },
+              { id: "add",      label: "Daal Do", Icon: PlusIcon },
+              { id: "list",     label: "Ayashi",  Icon: ListIcon },
+              { id: "hisab",    label: "Hisab",   Icon: CalculatorIcon },
+              { id: "history",  label: "History", Icon: HistoryIcon },
+              { id: "personal", label: "Mera",    Icon: UserIcon },
             ] as { id: Tab; label: string; Icon: React.FC<{ size?: number; className?: string }> }[]
           ).map(({ id, label, Icon }) => (
             <button
