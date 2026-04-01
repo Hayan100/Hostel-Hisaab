@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Expense, Session, Settlement, Profile } from "@/lib/types";
 import AddExpenseForm from "@/components/AddExpenseForm";
@@ -20,18 +20,9 @@ export default function Home() {
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [mounted, setMounted] = useState(false);
   const router = useRouter();
-  const supabase = createClient();
 
-  const loadActiveSession = useCallback(async () => {
-    const { data } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("status", "active")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-    return data as Session | null;
-  }, [supabase]);
+  // Stable client — created once
+  const supabase = useMemo(() => createClient(), []);
 
   const loadExpenses = useCallback(async (sessionId: string) => {
     const { data } = await supabase
@@ -44,7 +35,6 @@ export default function Home() {
 
   useEffect(() => {
     async function init() {
-      // Get current user & profile
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push("/login"); return; }
 
@@ -55,10 +45,16 @@ export default function Home() {
         .single();
       setProfile(prof as Profile);
 
-      // Load active session
-      const session = await loadActiveSession();
+      const { data: session } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("status", "active")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+
       if (session) {
-        setActiveSession(session);
+        setActiveSession(session as Session);
         await loadExpenses(session.id);
       }
 
@@ -71,7 +67,7 @@ export default function Home() {
     init();
   }, []);
 
-  // Real-time subscription
+  // Real-time subscription — stable because supabase & loadExpenses are stable
   useEffect(() => {
     if (!activeSession) return;
 
@@ -85,7 +81,7 @@ export default function Home() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [activeSession, loadExpenses]);
+  }, [activeSession?.id]);
 
   async function handleSave(expenseData: Omit<Expense, "id" | "session_id" | "created_at">) {
     if (!activeSession) return;
@@ -111,11 +107,14 @@ export default function Home() {
       });
     }
 
+    // Directly refresh — don't wait for real-time
+    await loadExpenses(activeSession.id);
     setTab("list");
   }
 
   async function handleDelete(id: string) {
     await supabase.from("expenses").delete().eq("id", id);
+    if (activeSession) await loadExpenses(activeSession.id);
   }
 
   function handleEdit(expense: Expense) {
@@ -126,7 +125,6 @@ export default function Home() {
   async function handleSettle(settlements: Settlement[]) {
     if (!activeSession) return;
 
-    // Save settlements
     if (settlements.length > 0) {
       await supabase.from("settlements").insert(
         settlements.map((s) => ({
@@ -138,13 +136,11 @@ export default function Home() {
       );
     }
 
-    // Mark session as settled
     await supabase
       .from("sessions")
       .update({ status: "settled", settled_at: new Date().toISOString() })
       .eq("id", activeSession.id);
 
-    // Create new active session
     const { data: newSession } = await supabase
       .from("sessions")
       .insert({ status: "active" })
@@ -172,9 +168,9 @@ export default function Home() {
           <div>
             <h1 className="text-xl font-bold text-gray-800 leading-tight">Hostel Hisaab</h1>
             <p className="text-xs text-gray-400">
-              {profile ? (
-                <span className="text-teal-600 font-medium">{profile.name}</span>
-              ) : "Hayan · Usman · Mubassir · Hasnain"}
+              {profile
+                ? <span className="text-teal-600 font-medium">{profile.name}</span>
+                : "Hayan · Usman · Mubassir · Hasnain"}
             </p>
           </div>
           <div className="ml-auto flex items-center gap-2">
@@ -186,7 +182,6 @@ export default function Home() {
             <button
               onClick={handleLogout}
               className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-all"
-              title="Logout"
             >
               <LogoutIcon size={18} />
             </button>
@@ -214,11 +209,7 @@ export default function Home() {
             <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 px-1">
               Ayashi ka Record
             </h2>
-            <ExpenseList
-              expenses={expenses}
-              onEdit={handleEdit}
-              onDelete={handleDelete}
-            />
+            <ExpenseList expenses={expenses} onEdit={handleEdit} onDelete={handleDelete} />
           </div>
         )}
 
@@ -246,10 +237,10 @@ export default function Home() {
         <div className="flex">
           {(
             [
-              { id: "add",     label: "Daal Do",  Icon: PlusIcon },
-              { id: "list",    label: "Ayashi",   Icon: ListIcon },
-              { id: "hisab",   label: "Hisab",    Icon: CalculatorIcon },
-              { id: "history", label: "History",  Icon: HistoryIcon },
+              { id: "add",     label: "Daal Do", Icon: PlusIcon },
+              { id: "list",    label: "Ayashi",  Icon: ListIcon },
+              { id: "hisab",   label: "Hisab",   Icon: CalculatorIcon },
+              { id: "history", label: "History", Icon: HistoryIcon },
             ] as { id: Tab; label: string; Icon: React.FC<{ size?: number; className?: string }> }[]
           ).map(({ id, label, Icon }) => (
             <button
