@@ -44,54 +44,58 @@ export default function PersonalView({ profile }: Props) {
 
   async function loadFeed() {
     setLoading(true);
+    try {
+      // Load all shared expenses
+      const { data: allExpenses } = await supabase
+        .from("expenses")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    // Load all shared expenses across all sessions where this person participated
-    const { data: allExpenses } = await supabase
-      .from("expenses")
-      .select("*, sessions(created_at, status)")
-      .order("created_at", { ascending: false });
+      // Load private personal expenses
+      const { data: privateExpenses } = await supabase
+        .from("personal_expenses")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    // Load private personal expenses
-    const { data: privateExpenses } = await supabase
-      .from("personal_expenses")
-      .select("*")
-      .order("created_at", { ascending: false });
+      const sharedEntries: SharedEntry[] = [];
 
-    const sharedEntries: SharedEntry[] = [];
+      for (const e of (allExpenses ?? []) as Expense[]) {
+        if (!e.participants.includes(profile.name)) continue;
 
-    for (const e of (allExpenses ?? []) as (Expense & { sessions: { created_at: string; status: string } })[]) {
-      if (!e.participants.includes(profile.name)) continue;
+        let myShare = 0;
+        if (e.split_type === "equal") {
+          myShare = e.amount / e.participants.length;
+        } else if (e.split_type === "custom" && e.custom_split) {
+          myShare = e.custom_split[profile.name] ?? 0;
+        }
 
-      let myShare = 0;
-      if (e.split_type === "equal") {
-        myShare = e.amount / e.participants.length;
-      } else if (e.split_type === "custom" && e.custom_split) {
-        myShare = e.custom_split[profile.name] ?? 0;
+        if (myShare <= 0) continue;
+
+        sharedEntries.push({
+          id: e.id,
+          description: e.description,
+          amount: myShare,
+          created_at: e.created_at,
+          type: "shared",
+          session_label: e.paid_by === profile.name ? "Maine diya" : `${e.paid_by} ne diya`,
+        });
       }
 
-      if (myShare <= 0) continue;
+      const privateEntries: PersonalExpense[] = (privateExpenses ?? []).map((p: PersonalExpense) => ({
+        ...p,
+        type: "private" as const,
+      }));
 
-      sharedEntries.push({
-        id: e.id,
-        description: e.description,
-        amount: myShare,
-        created_at: e.created_at,
-        type: "shared",
-        session_label: e.paid_by === profile.name ? "Maine diya" : `${e.paid_by} ne diya`,
-      });
+      const combined: FeedEntry[] = [...sharedEntries, ...privateEntries].sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+
+      setFeed(combined);
+    } catch (err) {
+      console.error("PersonalView loadFeed error:", err);
+    } finally {
+      setLoading(false);
     }
-
-    const privateEntries: PersonalExpense[] = (privateExpenses ?? []).map((p: PersonalExpense) => ({
-      ...p,
-      type: "private" as const,
-    }));
-
-    const combined: FeedEntry[] = [...sharedEntries, ...privateEntries].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    );
-
-    setFeed(combined);
-    setLoading(false);
   }
 
   async function handleAddPrivate(e: React.FormEvent) {
