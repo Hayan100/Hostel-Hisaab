@@ -1,65 +1,273 @@
-import Image from "next/image";
+"use client";
+
+import React, { useState, useEffect, useCallback } from "react";
+import { createClient } from "@/lib/supabase/client";
+import { Expense, Session, Settlement, Profile } from "@/lib/types";
+import AddExpenseForm from "@/components/AddExpenseForm";
+import ExpenseList from "@/components/ExpenseList";
+import HisabKaro from "@/components/HisabKaro";
+import HistoryView from "@/components/HistoryView";
+import { PlusIcon, ListIcon, CalculatorIcon, LedgerIcon, HistoryIcon, LogoutIcon } from "@/components/Icons";
+import { useRouter } from "next/navigation";
+
+type Tab = "add" | "list" | "hisab" | "history";
 
 export default function Home() {
+  const [tab, setTab] = useState<Tab>("add");
+  const [profile, setProfile] = useState<Profile | null>(null);
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
+  const [mounted, setMounted] = useState(false);
+  const router = useRouter();
+  const supabase = createClient();
+
+  const loadActiveSession = useCallback(async () => {
+    const { data } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("status", "active")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+    return data as Session | null;
+  }, [supabase]);
+
+  const loadExpenses = useCallback(async (sessionId: string) => {
+    const { data } = await supabase
+      .from("expenses")
+      .select("*")
+      .eq("session_id", sessionId)
+      .order("created_at", { ascending: true });
+    setExpenses((data ?? []) as Expense[]);
+  }, [supabase]);
+
+  useEffect(() => {
+    async function init() {
+      // Get current user & profile
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push("/login"); return; }
+
+      const { data: prof } = await supabase
+        .from("profiles")
+        .select("*")
+        .eq("id", user.id)
+        .single();
+      setProfile(prof as Profile);
+
+      // Load active session
+      const session = await loadActiveSession();
+      if (session) {
+        setActiveSession(session);
+        await loadExpenses(session.id);
+      }
+
+      setMounted(true);
+
+      if ("serviceWorker" in navigator) {
+        navigator.serviceWorker.register("/sw.js").catch(() => {});
+      }
+    }
+    init();
+  }, []);
+
+  // Real-time subscription
+  useEffect(() => {
+    if (!activeSession) return;
+
+    const channel = supabase
+      .channel(`expenses:${activeSession.id}`)
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "expenses", filter: `session_id=eq.${activeSession.id}` },
+        () => { loadExpenses(activeSession.id); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [activeSession, loadExpenses]);
+
+  async function handleSave(expenseData: Omit<Expense, "id" | "session_id" | "created_at">) {
+    if (!activeSession) return;
+
+    if (editingExpense) {
+      await supabase
+        .from("expenses")
+        .update({
+          paid_by: expenseData.paid_by,
+          amount: expenseData.amount,
+          description: expenseData.description,
+          participants: expenseData.participants,
+          split_type: expenseData.split_type,
+          custom_split: expenseData.custom_split ?? null,
+        })
+        .eq("id", editingExpense.id);
+      setEditingExpense(null);
+    } else {
+      await supabase.from("expenses").insert({
+        session_id: activeSession.id,
+        ...expenseData,
+        custom_split: expenseData.custom_split ?? null,
+      });
+    }
+
+    setTab("list");
+  }
+
+  async function handleDelete(id: string) {
+    await supabase.from("expenses").delete().eq("id", id);
+  }
+
+  function handleEdit(expense: Expense) {
+    setEditingExpense(expense);
+    setTab("add");
+  }
+
+  async function handleSettle(settlements: Settlement[]) {
+    if (!activeSession) return;
+
+    // Save settlements
+    if (settlements.length > 0) {
+      await supabase.from("settlements").insert(
+        settlements.map((s) => ({
+          session_id: activeSession.id,
+          from_person: s.from,
+          to_person: s.to,
+          amount: s.amount,
+        }))
+      );
+    }
+
+    // Mark session as settled
+    await supabase
+      .from("sessions")
+      .update({ status: "settled", settled_at: new Date().toISOString() })
+      .eq("id", activeSession.id);
+
+    // Create new active session
+    const { data: newSession } = await supabase
+      .from("sessions")
+      .insert({ status: "active" })
+      .select()
+      .single();
+
+    setActiveSession(newSession as Session);
+    setExpenses([]);
+    setTab("add");
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    router.push("/login");
+  }
+
+  if (!mounted) return null;
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <div className="min-h-screen bg-[#F7F5F0] flex flex-col max-w-md mx-auto">
+      {/* Header */}
+      <header className="px-5 pt-10 pb-6">
+        <div className="flex items-center gap-3">
+          <LedgerIcon size={36} />
+          <div>
+            <h1 className="text-xl font-bold text-gray-800 leading-tight">Hostel Hisaab</h1>
+            <p className="text-xs text-gray-400">
+              {profile ? (
+                <span className="text-teal-600 font-medium">{profile.name}</span>
+              ) : "Hayan · Usman · Mubassir · Hasnain"}
+            </p>
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            {expenses.length > 0 && (
+              <span className="bg-teal-600 text-white text-xs font-bold px-2.5 py-1 rounded-full">
+                {expenses.length}
+              </span>
+            )}
+            <button
+              onClick={handleLogout}
+              className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-all"
+              title="Logout"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              <LogoutIcon size={18} />
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+      </header>
+
+      {/* Content */}
+      <main className="flex-1 px-4 pb-28 overflow-y-auto">
+        {tab === "add" && (
+          <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
+            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-5">
+              {editingExpense ? "Edit Karo" : "Kharcha Daal Do"}
+            </h2>
+            <AddExpenseForm
+              onSave={handleSave}
+              editingExpense={editingExpense}
+              onCancelEdit={() => { setEditingExpense(null); setTab("list"); }}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
+          </div>
+        )}
+
+        {tab === "list" && (
+          <div>
+            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 px-1">
+              Ayashi ka Record
+            </h2>
+            <ExpenseList
+              expenses={expenses}
+              onEdit={handleEdit}
+              onDelete={handleDelete}
+            />
+          </div>
+        )}
+
+        {tab === "hisab" && (
+          <div>
+            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 px-1">
+              Hisab Karo
+            </h2>
+            <HisabKaro expenses={expenses} onSettle={handleSettle} />
+          </div>
+        )}
+
+        {tab === "history" && (
+          <div>
+            <h2 className="text-sm font-bold text-gray-500 uppercase tracking-wider mb-4 px-1">
+              Purana Hisaab
+            </h2>
+            <HistoryView />
+          </div>
+        )}
       </main>
+
+      {/* Bottom Nav */}
+      <nav className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-md bg-white border-t border-gray-200 px-2 pb-safe">
+        <div className="flex">
+          {(
+            [
+              { id: "add",     label: "Daal Do",  Icon: PlusIcon },
+              { id: "list",    label: "Ayashi",   Icon: ListIcon },
+              { id: "hisab",   label: "Hisab",    Icon: CalculatorIcon },
+              { id: "history", label: "History",  Icon: HistoryIcon },
+            ] as { id: Tab; label: string; Icon: React.FC<{ size?: number; className?: string }> }[]
+          ).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              onClick={() => { setTab(id); if (id !== "add") setEditingExpense(null); }}
+              className={`flex-1 flex flex-col items-center gap-1 py-3 transition-all relative ${
+                tab === id ? "text-teal-600" : "text-gray-400 hover:text-gray-600"
+              }`}
+            >
+              <Icon size={22} />
+              <span className="text-[10px] font-semibold tracking-wide">{label}</span>
+              {tab === id && (
+                <span className="absolute bottom-0 w-8 h-0.5 bg-teal-600 rounded-full" />
+              )}
+            </button>
+          ))}
+        </div>
+      </nav>
     </div>
   );
 }
