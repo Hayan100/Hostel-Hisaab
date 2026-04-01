@@ -5,7 +5,7 @@ import { Expense, Person, PEOPLE, SplitType, CustomSplit } from "@/lib/types";
 import { PlusIcon } from "./Icons";
 
 interface Props {
-  onSave: (expense: Omit<Expense, "id" | "session_id" | "created_at">) => void;
+  onSave: (expense: Omit<Expense, "id" | "session_id" | "created_at">) => Promise<boolean>;
   editingExpense?: Expense | null;
   onCancelEdit?: () => void;
 }
@@ -56,7 +56,7 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
   const customTotal = allParticipants.reduce((s, p) => s + (customSplit[p] ?? 0), 0);
   const equalShare = allParticipants.length > 0 ? totalAmount / allParticipants.length : 0;
 
-  function handleSubmit(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError("");
 
@@ -72,16 +72,20 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
       }
     }
 
-    onSave({
+    const ok = await onSave({
       paid_by: paidBy,
       amount: totalAmount,
       description: description.trim() || "Koi baat nahi",
-      participants: allParticipants, // payer always included
+      participants: allParticipants,
       split_type: splitType,
       custom_split: splitType === "custom" ? customSplit : undefined,
     });
 
-    resetForm();
+    if (ok) {
+      resetForm();
+    } else {
+      setError("Save nahi hua — dobara try karo.");
+    }
   }
 
   function resetForm() {

@@ -93,8 +93,8 @@ export default function Home() {
     return () => { supabase.removeChannel(channel); };
   }, [activeSession?.id]);
 
-  async function handleSave(expenseData: Omit<Expense, "id" | "session_id" | "created_at">) {
-    if (!activeSession) return;
+  async function handleSave(expenseData: Omit<Expense, "id" | "session_id" | "created_at">): Promise<boolean> {
+    if (!activeSession) return false;
 
     if (editingExpense) {
       const { error } = await supabase
@@ -108,7 +108,7 @@ export default function Home() {
           custom_split: expenseData.custom_split ?? null,
         })
         .eq("id", editingExpense.id);
-      if (error) { console.error("Update failed:", error); return; }
+      if (error) { console.error("Update failed:", error); return false; }
       setEditingExpense(null);
     } else {
       const { error } = await supabase.from("expenses").insert({
@@ -116,11 +116,12 @@ export default function Home() {
         ...expenseData,
         custom_split: expenseData.custom_split ?? null,
       });
-      if (error) { console.error("Insert failed:", error); return; }
+      if (error) { console.error("Insert failed:", error); return false; }
     }
 
     await loadExpenses(activeSession.id);
     setTab("list");
+    return true;
   }
 
   async function handleDelete(id: string) {
