@@ -114,8 +114,9 @@ export default function Home() {
   }
 
   async function handleDelete(id: string) {
+    // Optimistic update first so UI responds instantly
+    setExpenses((prev) => prev.filter((e) => e.id !== id));
     await supabase.from("expenses").delete().eq("id", id);
-    if (activeSession) await loadExpenses(activeSession.id);
   }
 
   function handleEdit(expense: Expense) {
@@ -148,9 +149,12 @@ export default function Home() {
       .select()
       .single();
 
-    setActiveSession(newSession as Session);
+    const session = newSession as Session;
+    setActiveSession(session);
     setExpenses([]);
     setTab("add");
+    // Explicitly load expenses for new session (will be empty, but subscription is now on correct session)
+    await loadExpenses(session.id);
   }
 
   async function handleLogout() {

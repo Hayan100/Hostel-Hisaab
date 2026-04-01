@@ -51,8 +51,10 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
   }
 
   const totalAmount = parseFloat(amount) || 0;
-  const customTotal = participants.reduce((s, p) => s + (customSplit[p] ?? 0), 0);
-  const equalShare = participants.length > 0 ? totalAmount / participants.length : 0;
+  // payer is always a participant — included in all splits
+  const allParticipants: Person[] = [...participants, paidBy];
+  const customTotal = allParticipants.reduce((s, p) => s + (customSplit[p] ?? 0), 0);
+  const equalShare = allParticipants.length > 0 ? totalAmount / allParticipants.length : 0;
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -60,10 +62,6 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
 
     if (!amount || isNaN(totalAmount) || totalAmount <= 0) {
       setError("Amount sahi daal bhai.");
-      return;
-    }
-    if (participants.length === 0) {
-      setError("Kam az kam ek muftkhor toh select kar.");
       return;
     }
     if (splitType === "custom") {
@@ -78,7 +76,7 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
       paid_by: paidBy,
       amount: totalAmount,
       description: description.trim() || "Koi baat nahi",
-      participants,
+      participants: allParticipants, // payer always included
       split_type: splitType,
       custom_split: splitType === "custom" ? customSplit : undefined,
     });
@@ -206,16 +204,35 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
         </div>
       </div>
 
-      {splitType === "equal" && participants.length > 0 && totalAmount > 0 && (
+      {splitType === "equal" && totalAmount > 0 && (
         <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3">
           <p className="text-sm text-teal-800 font-medium">
             Har banda dega: <span className="font-bold">Rs. {equalShare.toFixed(0)}</span>
           </p>
+          <p className="text-xs text-teal-600 mt-0.5">
+            {allParticipants.join(", ")}
+          </p>
         </div>
       )}
 
-      {splitType === "custom" && participants.length > 0 && (
+      {splitType === "custom" && (
         <div className="space-y-2">
+          {/* Payer's own share field */}
+          <div className="flex items-center gap-3">
+            <span className="text-sm font-medium text-teal-700 w-20">{paidBy} <span className="text-xs">(dene wala)</span></span>
+            <div className="relative flex-1">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">Rs.</span>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={customSplit[paidBy] || ""}
+                onChange={(e) => handleCustomSplitChange(paidBy, e.target.value)}
+                placeholder="0"
+                className="w-full border-2 border-teal-200 rounded-xl pl-10 pr-4 py-2.5 text-gray-800 focus:outline-none focus:border-teal-400 text-sm"
+              />
+            </div>
+          </div>
           {participants.map((p) => (
             <div key={p} className="flex items-center gap-3">
               <span className="text-sm font-medium text-gray-700 w-20">{p}</span>
@@ -238,6 +255,7 @@ export default function AddExpenseForm({ onSave, editingExpense, onCancelEdit }:
           </div>
         </div>
       )}
+
 
       {error && (
         <p className="text-sm text-red-500 bg-red-50 px-4 py-2.5 rounded-xl border border-red-200">
