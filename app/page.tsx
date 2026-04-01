@@ -45,13 +45,23 @@ export default function Home() {
         .single();
       setProfile(prof as Profile);
 
-      const { data: session } = await supabase
+      let { data: session } = await supabase
         .from("sessions")
         .select("*")
         .eq("status", "active")
         .order("created_at", { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
+
+      if (!session) {
+        // No active session exists — create one
+        const { data: newSession } = await supabase
+          .from("sessions")
+          .insert({ status: "active" })
+          .select()
+          .single();
+        session = newSession;
+      }
 
       if (session) {
         setActiveSession(session as Session);
@@ -87,7 +97,7 @@ export default function Home() {
     if (!activeSession) return;
 
     if (editingExpense) {
-      await supabase
+      const { error } = await supabase
         .from("expenses")
         .update({
           paid_by: expenseData.paid_by,
@@ -98,24 +108,28 @@ export default function Home() {
           custom_split: expenseData.custom_split ?? null,
         })
         .eq("id", editingExpense.id);
+      if (error) { console.error("Update failed:", error); return; }
       setEditingExpense(null);
     } else {
-      await supabase.from("expenses").insert({
+      const { error } = await supabase.from("expenses").insert({
         session_id: activeSession.id,
         ...expenseData,
         custom_split: expenseData.custom_split ?? null,
       });
+      if (error) { console.error("Insert failed:", error); return; }
     }
 
-    // Directly refresh — don't wait for real-time
     await loadExpenses(activeSession.id);
     setTab("list");
   }
 
   async function handleDelete(id: string) {
-    // Optimistic update first so UI responds instantly
     setExpenses((prev) => prev.filter((e) => e.id !== id));
-    await supabase.from("expenses").delete().eq("id", id);
+    const { error } = await supabase.from("expenses").delete().eq("id", id);
+    // Always re-sync with DB — if delete failed, the expense will reappear (correct behaviour);
+    // if it succeeded, this confirms the removal.
+    if (activeSession) await loadExpenses(activeSession.id);
+    if (error) console.error("Delete failed:", error);
   }
 
   function handleEdit(expense: Expense) {
@@ -127,7 +141,7 @@ export default function Home() {
     if (!activeSession) return;
 
     if (settlements.length > 0) {
-      await supabase.from("settlements").insert(
+      const { error: sErr } = await supabase.from("settlements").insert(
         settlements.map((s) => ({
           session_id: activeSession.id,
           from_person: s.from,
@@ -135,24 +149,30 @@ export default function Home() {
           amount: s.amount,
         }))
       );
+      if (sErr) console.error("Settlements insert failed:", sErr);
     }
 
-    await supabase
+    const { error: uErr } = await supabase
       .from("sessions")
       .update({ status: "settled", settled_at: new Date().toISOString() })
       .eq("id", activeSession.id);
+    if (uErr) console.error("Session settle failed:", uErr);
 
-    const { data: newSession } = await supabase
+    const { data: newSession, error: nErr } = await supabase
       .from("sessions")
       .insert({ status: "active" })
       .select()
       .single();
 
+    if (nErr || !newSession) {
+      console.error("New session creation failed:", nErr);
+      return;
+    }
+
     const session = newSession as Session;
     setActiveSession(session);
     setExpenses([]);
     setTab("add");
-    // Explicitly load expenses for new session (will be empty, but subscription is now on correct session)
     await loadExpenses(session.id);
   }
 

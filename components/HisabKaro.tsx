@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { Expense, Person, Settlement } from "@/lib/types";
 import { computeNetBalances, simplifyDebts } from "@/lib/calculations";
 import { DownloadIcon, RefreshIcon, ArrowRightIcon } from "./Icons";
@@ -15,6 +15,11 @@ export default function HisabKaro({ expenses, onSettle }: Props) {
   const [showConfirm, setShowConfirm] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [settling, setSettling] = useState(false);
+
+  // Reset view whenever expenses list changes so stale calculations aren't shown
+  useEffect(() => {
+    setSettled(false);
+  }, [expenses]);
 
   const balances = computeNetBalances(expenses);
   const settlements = simplifyDebts(balances);
