@@ -12,14 +12,20 @@ export default function LoginPage() {
   async function handleGoogleLogin() {
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithOAuth({
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
         redirectTo: `${window.location.origin}/auth/callback`,
+        skipBrowserRedirect: true,
       },
     });
     if (error) {
       setError(`Error: ${error.message}`);
+      setLoading(false);
+    } else if (data?.url) {
+      window.location.href = data.url;
+    } else {
+      setError("Google redirect URL nahi mila.");
       setLoading(false);
     }
   }
