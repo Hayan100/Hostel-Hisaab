@@ -2,50 +2,44 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { Expense, Session, Settlement, Profile } from "@/lib/types";
+import { Expense, Session, Settlement } from "@/lib/types";
 import AddExpenseForm from "@/components/AddExpenseForm";
 import ExpenseList from "@/components/ExpenseList";
 import HisabKaro from "@/components/HisabKaro";
 import HistoryView from "@/components/HistoryView";
-import { PlusIcon, ListIcon, CalculatorIcon, LedgerIcon, HistoryIcon, LogoutIcon } from "@/components/Icons";
-import { useRouter } from "next/navigation";
+import { PlusIcon, ListIcon, CalculatorIcon, LedgerIcon, HistoryIcon } from "@/components/Icons";
 
 type Tab = "add" | "list" | "hisab" | "history";
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("add");
-  const [profile, setProfile] = useState<Profile | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [editingExpense, setEditingExpense] = useState<Expense | null>(null);
   const [mounted, setMounted] = useState(false);
-  const router = useRouter();
+  const [error, setError] = useState<string | null>(null);
 
-  // Stable client — created once
   const supabase = useMemo(() => createClient(), []);
 
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    window.location.href = "/login";
+  }
+
   const loadExpenses = useCallback(async (sessionId: string) => {
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from("expenses")
       .select("*")
       .eq("session_id", sessionId)
       .order("created_at", { ascending: true });
+    if (error) { console.error("loadExpenses:", error); return; }
     setExpenses((data ?? []) as Expense[]);
   }, [supabase]);
 
   useEffect(() => {
     async function init() {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push("/login"); return; }
-
-      const { data: prof } = await supabase
-        .from("profiles")
-        .select("*")
-        .eq("id", user.id)
-        .single();
-      setProfile(prof as Profile);
-
-      let { data: session } = await supabase
+      // Get existing active session or create one
+      let { data: session, error: fetchErr } = await supabase
         .from("sessions")
         .select("*")
         .eq("status", "active")
@@ -53,21 +47,29 @@ export default function Home() {
         .limit(1)
         .maybeSingle();
 
+      if (fetchErr) {
+        setError("Database se connect nahi ho raha. Supabase setup check karo.");
+        setMounted(true);
+        return;
+      }
+
       if (!session) {
-        // No active session exists — create one
-        const { data: newSession } = await supabase
+        const { data: newSession, error: createErr } = await supabase
           .from("sessions")
           .insert({ status: "active" })
           .select()
           .single();
+
+        if (createErr || !newSession) {
+          setError("Naya session nahi ban raha: " + (createErr?.message ?? "unknown error"));
+          setMounted(true);
+          return;
+        }
         session = newSession;
       }
 
-      if (session) {
-        setActiveSession(session as Session);
-        await loadExpenses(session.id);
-      }
-
+      setActiveSession(session as Session);
+      await loadExpenses(session.id);
       setMounted(true);
 
       if ("serviceWorker" in navigator) {
@@ -77,10 +79,9 @@ export default function Home() {
     init();
   }, []);
 
-  // Real-time subscription — stable because supabase & loadExpenses are stable
+  // Real-time: reload expenses when any change happens in this session
   useEffect(() => {
     if (!activeSession) return;
-
     const channel = supabase
       .channel(`expenses:${activeSession.id}`)
       .on(
@@ -89,7 +90,6 @@ export default function Home() {
         () => { loadExpenses(activeSession.id); }
       )
       .subscribe();
-
     return () => { supabase.removeChannel(channel); };
   }, [activeSession?.id]);
 
@@ -113,7 +113,11 @@ export default function Home() {
     } else {
       const { error } = await supabase.from("expenses").insert({
         session_id: activeSession.id,
-        ...expenseData,
+        paid_by: expenseData.paid_by,
+        amount: expenseData.amount,
+        description: expenseData.description,
+        participants: expenseData.participants,
+        split_type: expenseData.split_type,
         custom_split: expenseData.custom_split ?? null,
       });
       if (error) { console.error("Insert failed:", error); return false; }
@@ -127,10 +131,8 @@ export default function Home() {
   async function handleDelete(id: string) {
     setExpenses((prev) => prev.filter((e) => e.id !== id));
     const { error } = await supabase.from("expenses").delete().eq("id", id);
-    // Always re-sync with DB — if delete failed, the expense will reappear (correct behaviour);
-    // if it succeeded, this confirms the removal.
+    if (error) { console.error("Delete failed:", error); }
     if (activeSession) await loadExpenses(activeSession.id);
-    if (error) console.error("Delete failed:", error);
   }
 
   function handleEdit(expense: Expense) {
@@ -142,7 +144,7 @@ export default function Home() {
     if (!activeSession) return;
 
     if (settlements.length > 0) {
-      const { error: sErr } = await supabase.from("settlements").insert(
+      await supabase.from("settlements").insert(
         settlements.map((s) => ({
           session_id: activeSession.id,
           from_person: s.from,
@@ -150,39 +152,44 @@ export default function Home() {
           amount: s.amount,
         }))
       );
-      if (sErr) console.error("Settlements insert failed:", sErr);
     }
 
-    const { error: uErr } = await supabase
+    await supabase
       .from("sessions")
       .update({ status: "settled", settled_at: new Date().toISOString() })
       .eq("id", activeSession.id);
-    if (uErr) console.error("Session settle failed:", uErr);
 
-    const { data: newSession, error: nErr } = await supabase
+    const { data: newSession } = await supabase
       .from("sessions")
       .insert({ status: "active" })
       .select()
       .single();
 
-    if (nErr || !newSession) {
-      console.error("New session creation failed:", nErr);
-      return;
+    if (newSession) {
+      setActiveSession(newSession as Session);
+      setExpenses([]);
+      setTab("add");
     }
-
-    const session = newSession as Session;
-    setActiveSession(session);
-    setExpenses([]);
-    setTab("add");
-    await loadExpenses(session.id);
   }
 
-  async function handleLogout() {
-    await supabase.auth.signOut();
-    router.push("/login");
+  if (!mounted) {
+    return (
+      <div className="min-h-screen bg-[#F7F5F0] flex items-center justify-center">
+        <p className="text-gray-400 text-sm">Load ho raha hai...</p>
+      </div>
+    );
   }
 
-  if (!mounted) return null;
+  if (error) {
+    return (
+      <div className="min-h-screen bg-[#F7F5F0] flex items-center justify-center px-6">
+        <div className="bg-white rounded-2xl p-6 shadow-sm border border-red-100 text-center max-w-sm">
+          <p className="text-red-500 font-semibold text-sm mb-2">Kuch gadbad ho gayi</p>
+          <p className="text-gray-500 text-xs">{error}</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F7F5F0] flex flex-col max-w-md mx-auto">
@@ -192,11 +199,7 @@ export default function Home() {
           <LedgerIcon size={36} />
           <div>
             <h1 className="text-xl font-bold text-gray-800 leading-tight">Hostel Hisaab</h1>
-            <p className="text-xs text-gray-400">
-              {profile
-                ? <span className="text-teal-600 font-medium">{profile.name}</span>
-                : "Hayan · Usman · Mubassir · Hasnain"}
-            </p>
+            <p className="text-xs text-gray-400">Hayan · Usman · Mubassir · Hasnain</p>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {expenses.length > 0 && (
@@ -206,9 +209,10 @@ export default function Home() {
             )}
             <button
               onClick={handleLogout}
-              className="p-2 rounded-xl text-gray-400 hover:text-gray-600 hover:bg-gray-200 transition-all"
+              className="text-xs text-gray-400 hover:text-red-400 transition-colors px-2 py-1 rounded-lg hover:bg-red-50"
+              title="Logout"
             >
-              <LogoutIcon size={18} />
+              Nikal Jao
             </button>
           </div>
         </div>
@@ -255,8 +259,6 @@ export default function Home() {
             <HistoryView />
           </div>
         )}
-
-
       </main>
 
       {/* Bottom Nav */}
@@ -264,10 +266,10 @@ export default function Home() {
         <div className="flex">
           {(
             [
-              { id: "add",      label: "Daal Do", Icon: PlusIcon },
-              { id: "list",     label: "Ayashi",  Icon: ListIcon },
-              { id: "hisab",    label: "Hisab",   Icon: CalculatorIcon },
-              { id: "history",  label: "History", Icon: HistoryIcon },
+              { id: "add",     label: "Daal Do",  Icon: PlusIcon },
+              { id: "list",    label: "Ayashi",   Icon: ListIcon },
+              { id: "hisab",   label: "Hisab",    Icon: CalculatorIcon },
+              { id: "history", label: "History",  Icon: HistoryIcon },
             ] as { id: Tab; label: string; Icon: React.FC<{ size?: number; className?: string }> }[]
           ).map(({ id, label, Icon }) => (
             <button
